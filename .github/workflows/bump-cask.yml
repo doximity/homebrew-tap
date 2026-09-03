@@ -1,0 +1,83 @@
+name: Bump doximity cask
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 09:17 UTC daily — off the hour to spread scheduler load
+    - cron: "17 9 * * *"
+
+concurrency:
+  group: bump-doximity
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for new stable release
+        id: check
+        run: |
+          feed_base="https://updates.doximity.com/desktop/stable/mac-arm64"
+          manifest="$(curl -fsSL "${feed_base}/stable-mac.yml")"
+          new_version="$(printf '%s\n' "${manifest}" | awk -F': ' '/^version:/{print $2; exit}')"
+          [[ -n "${new_version}" ]] || { echo "::error::could not read version from stable-mac.yml"; exit 1; }
+          cur_version="$(sed -nE 's/^  version "([^"]+)"/\1/p' Casks/doximity.rb)"
+          {
+            echo "current=${cur_version}"
+            echo "latest=${new_version}"
+          } >> "${GITHUB_OUTPUT}"
+          if [[ "${cur_version}" == "${new_version}" ]]; then
+            echo "Cask is up to date (${cur_version}) — nothing to do."
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "New stable release found: ${cur_version} -> ${new_version}"
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Bump cask and open PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ steps.check.outputs.current }}
+          VERSION: ${{ steps.check.outputs.latest }}
+        run: |
+          branch="bump/doximity-${VERSION}"
+
+          # Fast no-op if a PR for this version is already open
+          if [[ -n "$(gh pr list --head "${branch}" --state open)" ]]; then
+            echo "PR for ${branch} is already open — nothing to do."
+            exit 0
+          fi
+
+          # Remove a stale branch left by a closed (unmerged) PR so we can recreate it
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+            git push origin --delete "${branch}"
+          fi
+
+          # Download the DMG and rewrite version + sha256 in the cask (portable, see bin/bump.sh)
+          ./bin/bump.sh
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add Casks/doximity.rb
+          git commit -m "Bump doximity to ${VERSION}"
+          git push origin "${branch}"
+
+          gh pr create \
+            --head "${branch}" \
+            --title "Bump doximity ${CURRENT} → ${VERSION}" \
+            --body "Automated cask bump.
+
+          - Version: ${CURRENT} → ${VERSION}
+          - Source: https://updates.doximity.com/desktop/stable/mac-arm64/stable-mac.yml
+          - \`version\` and \`sha256\` regenerated from the released DMG via \`bin/bump.sh\`
+
+          Recommended before merge (on macOS): \`brew audit --cask --online jmonteiro/tap/doximity\`"
