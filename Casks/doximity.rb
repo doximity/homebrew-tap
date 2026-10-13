@@ -1,6 +1,6 @@
 cask "doximity" do
-  version "1.4.3"
-  sha256 "a2c1aa0d4357bec4f3856c090518bc8cf99a83fe1fe75ead21bf3d38801b3239"
+  version "1.4.4"
+  sha256 "840e70366d21129c0d362b6b145babbd1924b64b0f0b0f676c5a14e753c66d77"
 
   url "https://updates.doximity.com/desktop/stable/mac-arm64/Doximity-#{version}-universal.dmg"
   name "Doximity Desktop"
